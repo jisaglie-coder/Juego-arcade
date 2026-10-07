@@ -43,7 +43,7 @@ const sfx = {
 // ---------- Estado ----------
 const keys = {};
 let state = "title"; // title | play | over
-let ship, bullets, rocks, orbs, parts, floaters, stars;
+let ship, bullets, rocks, orbs, parts, floaters, stars, enemies, ebullets, boss, enemyT, bossLevel;
 let score, lives, level, energy, shake, hi, rapid, spawnT, orbT, shotT, time;
 try { hi = +localStorage.getItem("stardodger-hi") || 0; } catch (e) { hi = 0; }
 
@@ -56,6 +56,7 @@ function reset() {
   bullets = []; rocks = []; orbs = []; parts = []; floaters = [];
   score = 0; lives = 3; level = 1; energy = 0; shake = 0;
   rapid = 0; spawnT = 0; orbT = 3; shotT = 0; time = 0;
+  enemies = []; ebullets = []; boss = null; enemyT = 5; bossLevel = 0;
 }
 reset();
 
@@ -93,6 +94,27 @@ function makeRock(big, x, y) {
     vy: rand(70, 120) + level * 16,
     rot: rand(0, 6.28), vr: rand(-2, 2), hp: big ? 2 : 1, big, flash: 0
   };
+}
+
+function makeEnemy() {
+  return { x: rand(60, W - 60), y: -30, tx: rand(60, W - 60), ty: rand(80, 200), age: 0, r: 16,
+    hp: 2 + Math.floor(level / 4), fireT: rand(0.8, 1.6), flash: 0, ph: rand(0, 6) };
+}
+function aimed(x, y, speed, off = 0) {
+  const a = Math.atan2(ship.y - y, ship.x - x) + off;
+  ebullets.push({ x, y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed });
+}
+function enemyFire(e) {
+  if (level < 4) ebullets.push({ x: e.x, y: e.y + 14, vx: 0, vy: 230 });
+  else if (level < 7) aimed(e.x, e.y + 14, 250);
+  else { aimed(e.x, e.y + 14, 260, -0.25); aimed(e.x, e.y + 14, 260); aimed(e.x, e.y + 14, 260, 0.25); }
+  beep(300, 0.08, "square", 0.025, -150);
+}
+function spawnBoss() {
+  const hp = 40 + level * 8;
+  boss = { x: W / 2, y: -90, r: 52, hp, max: hp, t: 0, ringT: 2, burstT: 3, flash: 0, spin: 0 };
+  bossLevel = level; shake = 0.6; beep(90, 1, "sawtooth", 0.1, 60);
+  float(W / 2, H / 2, "¡¡ JEFE !!", "#ff4a6a");
 }
 
 function hurt() {
@@ -148,9 +170,68 @@ function update(dt) {
 
   // aparición de asteroides y orbes
   spawnT -= dt;
-  if (spawnT <= 0) { rocks.push(makeRock(Math.random() < 0.45)); spawnT = Math.max(0.28, 1.0 - level * 0.08) * rand(0.7, 1.2); }
+  if (spawnT <= 0) { rocks.push(makeRock(Math.random() < 0.45)); spawnT = Math.max(0.28, 1.0 - level * 0.08) * rand(0.7, 1.2) * (boss ? 2.5 : 1); }
   orbT -= dt;
   if (orbT <= 0) { orbs.push({ x: rand(30, W - 30), y: -20, vy: rand(80, 120), ph: rand(0, 6) }); orbT = rand(3, 6); }
+
+  // jefe cada 5 niveles
+  if (!boss && level % 5 === 0 && bossLevel !== level) spawnBoss();
+  // enemigos: aparecen desde el nivel 2 y disparan más con la dificultad
+  if (level >= 2 && !boss) {
+    enemyT -= dt;
+    if (enemyT <= 0) { enemies.push(makeEnemy()); enemyT = Math.max(2.2, 7 - level * 0.5) * rand(0.8, 1.2); }
+  }
+  for (const e of enemies) {
+    e.age += dt; e.flash = Math.max(0, e.flash - dt);
+    if (e.age < 10) {
+      e.x += (e.tx - e.x) * 1.5 * dt; e.y += (e.ty - e.y) * 1.5 * dt;
+      e.x += Math.sin(e.age * 2 + e.ph) * 60 * dt;
+      e.fireT -= dt;
+      if (e.fireT <= 0 && e.y > 20) { enemyFire(e); e.fireT = Math.max(0.7, 2.0 - level * 0.12) * rand(0.8, 1.2); }
+    } else e.y -= 160 * dt;
+    if (Math.hypot(e.x - ship.x, e.y - ship.y) < e.r + ship.r * 0.6 && ship.inv <= 0) { hurt(); e.hp = 0; burst(e.x, e.y, 25, "#ff6df0"); }
+  }
+  if (boss) {
+    const b = boss; b.t += dt; b.flash = Math.max(0, b.flash - dt); b.spin += dt;
+    const rage = b.hp < b.max / 2 ? 1.6 : 1;
+    if (b.y < 110) b.y += 80 * dt;
+    else {
+      b.x = W / 2 + Math.sin(b.t * 0.7 * rage) * (W / 2 - 100);
+      b.ringT -= dt * rage; b.burstT -= dt * rage;
+      if (b.ringT <= 0) {
+        b.ringT = 2.2;
+        const n = 14, off = b.t;
+        for (let i = 0; i < n; i++) { const a = off + i / n * 6.283; ebullets.push({ x: b.x, y: b.y, vx: Math.cos(a) * 170, vy: Math.sin(a) * 170 }); }
+        beep(200, 0.25, "sawtooth", 0.05, -100);
+      }
+      if (b.burstT <= 0) { b.burstT = 3; for (let i = -1; i <= 1; i++) aimed(b.x, b.y + 30, 280, i * 0.2); beep(260, 0.2, "square", 0.05, -120); }
+    }
+    if (Math.hypot(b.x - ship.x, b.y - ship.y) < b.r + ship.r * 0.6 && ship.inv <= 0) hurt();
+  }
+  // balas enemigas
+  for (const q of ebullets) {
+    q.x += q.vx * dt; q.y += q.vy * dt;
+    if (ship.inv <= 0 && Math.hypot(q.x - ship.x, q.y - ship.y) < 8 + ship.r * 0.5) { q.y = H + 99; hurt(); }
+  }
+  ebullets = ebullets.filter(q => q.y < H + 20 && q.y > -40 && q.x > -20 && q.x < W + 20);
+  // balas del jugador vs enemigos y jefe
+  for (const b of bullets) {
+    for (const e of enemies) if (e.hp > 0 && Math.hypot(b.x - e.x, b.y - e.y) < e.r + 4) {
+      b.y = -999; e.hp--; e.flash = 0.08; burst(e.x, e.y + 10, 4, "#fff", 120);
+      if (e.hp <= 0) { score += 150; float(e.x, e.y, "+150", "#ff6df0"); burst(e.x, e.y, 28, "#ff6df0"); sfx.boom(); shake = Math.max(shake, 0.12); }
+    }
+    if (boss && b.y > -900 && Math.hypot(b.x - boss.x, b.y - boss.y) < boss.r) {
+      b.y = -999; boss.hp--; boss.flash = 0.06; burst(b.x, boss.y + 40, 3, "#fff", 120); beep(500, 0.04, "square", 0.02);
+      if (boss.hp <= 0) {
+        score += 1000; float(boss.x, boss.y, "+1000", "#ffd24a");
+        for (let i = 0; i < 6; i++) burst(boss.x + rand(-40, 40), boss.y + rand(-40, 40), 30, i % 2 ? "#ffd24a" : "#ff4a6a", 400);
+        sfx.boom(); sfx.power(); shake = 0.8;
+        if (lives < 5) { lives++; float(ship.x, ship.y - 30, "¡VIDA EXTRA!", "#6dff6d"); }
+        ebullets = []; enemies.forEach(e => e.hp = 0); boss = null;
+      }
+    }
+  }
+  enemies = enemies.filter(e => e.hp > 0 && e.y > -60);
 
   // asteroides
   for (const r of rocks) {
@@ -227,6 +308,31 @@ function drawRock(r) {
   ctx.restore();
 }
 
+function drawEnemy(e) {
+  ctx.save(); ctx.translate(e.x, e.y);
+  glow("#ff6df0", 14);
+  ctx.fillStyle = e.flash > 0 ? "#fff" : "#5a1560"; ctx.strokeStyle = "#ff6df0"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, 16); ctx.lineTo(18, -10); ctx.lineTo(8, -6); ctx.lineTo(0, -14); ctx.lineTo(-8, -6); ctx.lineTo(-18, -10); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  noGlow(); ctx.fillStyle = "#ff4a6a"; ctx.beginPath(); ctx.arc(0, -2, 4, 0, 6.28); ctx.fill();
+  ctx.restore();
+}
+function drawBoss(b) {
+  ctx.save(); ctx.translate(b.x, b.y);
+  glow("#ff4a6a", 28);
+  ctx.fillStyle = b.flash > 0 ? "#fff" : "#3a0a22"; ctx.strokeStyle = "#ff4a6a"; ctx.lineWidth = 4;
+  ctx.beginPath();
+  for (let i = 0; i < 12; i++) { const a = i / 12 * 6.283, r = i % 2 ? 44 : b.r + 8; ctx.lineTo(Math.cos(a) * r * 1.15, Math.sin(a) * r * 0.9); }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.rotate(b.spin); ctx.strokeStyle = "#ffd24a"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, 0, 26, 0, 4.7); ctx.stroke();
+  ctx.rotate(-b.spin); noGlow();
+  const rage = b.hp < b.max / 2;
+  ctx.fillStyle = rage ? "#ff2a2a" : "#ffd24a"; ctx.beginPath(); ctx.arc(0, 0, 13 + Math.sin(b.t * (rage ? 12 : 5)) * 2, 0, 6.28); ctx.fill();
+  ctx.fillStyle = "#000"; ctx.beginPath(); ctx.arc(0, 0, 5, 0, 6.28); ctx.fill();
+  ctx.restore();
+}
+
 function drawHeart(x, y, s, color) {
   ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.fillStyle = color; glow(color, 8);
   ctx.beginPath(); ctx.moveTo(0, 4); ctx.bezierCurveTo(-9, -2, -5, -9, 0, -4); ctx.bezierCurveTo(5, -9, 9, -2, 0, 4); ctx.fill(); ctx.restore();
@@ -264,6 +370,11 @@ function draw() {
     }
     noGlow();
     rocks.forEach(drawRock);
+    enemies.forEach(drawEnemy);
+    if (boss) drawBoss(boss);
+    glow("#ff4a6a", 10); ctx.fillStyle = "#ff8a9a";
+    for (const q of ebullets) { ctx.beginPath(); ctx.arc(q.x, q.y, 5, 0, 6.28); ctx.fill(); }
+    noGlow();
     if (state === "play" || ship.inv > 0) drawShip();
     // partículas
     for (const p of parts) { ctx.globalAlpha = Math.max(0, p.life / p.max); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size); }
@@ -281,6 +392,11 @@ function draw() {
     ctx.strokeStyle = "#4af0ff"; ctx.lineWidth = 2; ctx.strokeRect(W - 136, 42, 120, 12);
     ctx.fillStyle = "#4af0ff"; ctx.fillRect(W - 134, 44, 116 * energy / 5, 8);
     text("ENERGÍA", W - 16, 74, 12, "#4af0ff", "right");
+    if (boss) {
+      ctx.strokeStyle = "#ff4a6a"; ctx.lineWidth = 2; ctx.strokeRect(W / 2 - 160, H - 28, 320, 14);
+      ctx.fillStyle = "#ff4a6a"; ctx.fillRect(W / 2 - 158, H - 26, 316 * Math.max(0, boss.hp) / boss.max, 10);
+      text("JEFE", W / 2, H - 34, 14, "#ff4a6a");
+    }
     if (rapid > 0) text("TRIPLE " + rapid.toFixed(1) + "s", W / 2, 54, 14, "#ff6df0");
   }
 
@@ -289,7 +405,7 @@ function draw() {
     glow("#4af0ff", 18); text("ARCADE", W / 2, 245, 28, "#4af0ff"); noGlow();
     if (Math.floor(time * 2 + performance.now() / 500) % 2 === 0) text("PULSA ESPACIO PARA JUGAR", W / 2, 340, 24, "#fff");
     text("← ↑ ↓ → / WASD  mover      ESPACIO  disparar", W / 2, 420, 16, "#aaa");
-    text("Esquiva asteroides · Recoge orbes · 5 orbes = vida extra", W / 2, 450, 16, "#aaa");
+    text("Esquiva asteroides y disparos · 5 orbes = vida extra · ¡jefe cada 5 niveles!", W / 2, 450, 16, "#aaa");
     text("En móvil: arrastra para mover (dispara solo)", W / 2, 480, 14, "#777");
     drawHeart(W / 2, 520, 3, "#ff4a6a");
   }
